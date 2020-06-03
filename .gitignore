@@ -1,3 +1,10 @@
+# System files
+.DS_Store
+*.swp
+*.swo
+*.xlsx
+*.xls
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

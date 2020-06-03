@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+
+__author__ = "André Leifeld, globaleyez GmbH"
+__copyright__ = "Copyright 2020 by globaleyez GmbH"
+__credits__ = []
+__license__ = "GPL"
+__version__ = "1.0.1"
+__maintainer__ = "André Leifeld"
+__email__ = "andre@globaleyez.net"
+__status__ = "Production"
+__description__ = '''
+Normalizes the TeamsID export file to have a Zoho compatible XLS file.
+'''
+
+import re
+import argparse
+from openpyxl import Workbook, load_workbook
+
+
+class Fields(object):
+
+    PASSWORD_TYPE = 'password'
+    TEXT_TYPE = 'text'
+
+    NAME_HEADER = 'Field'
+    VALUE_HEADER = 'Value'
+    TYPE_HEADER = 'Type'
+
+
+def get_header_dict(sheet):
+    name_re = '^({})(\d+)$'.format(Fields.NAME_HEADER)
+    value_re = '^({})(\d+)$'.format(Fields.VALUE_HEADER)
+    type_re = '^({})(\d+)$'.format(Fields.TYPE_HEADER)
+
+    head_cols = sheet[1]
+    pure = []
+    fields = {}
+    for col in head_cols:
+        name_match = re.search(name_re, col.value)
+        value_match = re.search(value_re, col.value)
+        type_match = re.search(type_re, col.value)
+        match = None
+        if hasattr(name_match, 'group'):
+            match = name_match
+        elif hasattr(value_match, 'group'):
+            match = value_match
+        elif hasattr(type_match, 'group'):
+            match = type_match
+        if match:
+            field_key = 'field{}'.format(match.group(2))
+            attr_key = match.group(1).lower()
+            if field_key not in fields:
+                fields[field_key] = {
+                    'field': None,
+                    'type': None,
+                    'value': None
+                }
+            fields[field_key][attr_key] = col.column_letter
+        else:
+            pure.append(col)
+    return (pure, fields)
+
+
+def create_header(new_sheet, pure, new_fields):
+    col_index = 1
+    for col in pure:
+        new_sheet.cell(
+            column=col_index,
+            row=1,
+            value=col.value
+        )
+        col_index += 1
+    for field in new_fields:
+        new_sheet.cell(
+            column=col_index,
+            row=1,
+            value=field
+        )
+        col_index += 1
+    return new_sheet
+
+
+def create_row(new_sheet, row_index, static_vals, url, username, pw):
+    col_index = 1
+    new_row = static_vals + [url, username, pw]
+    for value in new_row:
+        new_sheet.cell(
+            column=col_index,
+            row=row_index+1,
+            value=value
+        )
+        col_index += 1
+    return new_sheet
+
+
+def process_sheet(new_wb, sheet):
+    new_sheet = new_wb.active
+    pure, fields = get_header_dict(sheet)
+    new_fields = ['URL',  'Username', 'Password']
+    skip_next = True
+    index = 1
+    create_header(new_sheet, pure, new_fields)
+    desc_index = 0
+    new_row_index = 1
+    for row in sheet.rows:
+        if skip_next:
+            skip_next = False
+            continue
+        new_static_vals = []
+        for col in pure:
+            row_idx = index + 1
+            letter = col.column_letter
+            idx = '{}{}'.format(letter, row_idx)
+            new_static_vals.append(sheet[idx].value)
+
+        dyn_fields = {'URL': [], 'Password': [], 'Username': [], 'Other': []}
+        for key in fields:
+            field = fields[key]
+            row_idx = index + 1
+            name_idx = '{}{}'.format(field['field'], row_idx)
+            type_idx = '{}{}'.format(field['type'], row_idx)
+            value_idx = '{}{}'.format(field['value'], row_idx)
+            name_col = sheet[name_idx]
+            type_col = sheet[type_idx]
+            value_col = sheet[value_idx]
+            if type_col.value == Fields.TEXT_TYPE:
+                if name_col and name_col.value:
+                    if name_col.value not in dyn_fields.keys():
+                        print('Unknown field type in row {}. Skipping.'.format(
+                            row_idx))
+                        dyn_fields['Other'].append(value_col.value)
+                    else:
+                        dyn_fields[name_col.value].append(value_col.value)
+            elif type_col.value == Fields.PASSWORD_TYPE:
+                dyn_fields['Password'].append(value_col.value)
+
+        pw_index = 0
+        for pw in dyn_fields['Password']:
+            url = dyn_fields['URL'][0] if len(dyn_fields['URL']) > 0 else ''
+            if len(dyn_fields['Username']) == 0:
+                username = ''
+            elif len(dyn_fields['Username']) == 1:
+                username = dyn_fields['Username'][0]
+            else:
+                username = dyn_fields['Username'][pw_index]
+            desc = '{} {}'.format(new_static_vals[desc_index], username)
+            new_static_vals[desc_index] = desc
+            create_row(
+                new_sheet,
+                new_row_index,
+                new_static_vals,
+                url,
+                username,
+                pw
+            )
+            new_row_index += 1
+            pw_index += 1
+
+        index += 1
+
+
+def main(src_file, target_file):
+    wb = load_workbook(filename=src_file)
+    new_wb = Workbook()
+    for sheet in wb.worksheets:
+        process_sheet(new_wb, sheet)
+    new_wb.save(filename=target_file)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        prog='teamsid2zoho',
+        description=__description__,
+        epilog=__copyright__
+    )
+    parser.add_argument(
+        'src',
+        type=str,
+        help='path to source XLS-/XLSX-file'
+    )
+    parser.add_argument(
+        'target',
+        type=str,
+        help='path to new target file'
+    )
+    args = vars(parser.parse_args())
+
+    main(args['src'], args['target'])
